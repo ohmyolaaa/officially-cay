@@ -3167,16 +3167,18 @@ BY @caydigitals | <a href='https://t.me/clydecrunchybot'>BOT</a> | <a href='http
             country     = result.get("country", "N/A")
             return (
                 f"✂️ <b>CAPCUT HIT!</b>\n"
-                f"{proxy_warn}"
                 f"📧 <b>Email:</b> <code>{result['email']}</code>\n"
                 f"🔑 <b>Password:</b> <code>{result['password']}</code>\n"
-                f"━━━━━━━━━━━━━━━━━\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📦 <b>Plan:</b> {plan}\n"
                 f"📅 <b>Expiry:</b> {expiry}\n"
                 f"⏳ <b>Days Left:</b> {days_left}\n"
                 f"🔄 <b>Renewal:</b> {renewal}\n"
                 f"💳 <b>Billing:</b> {billing}\n"
-                f"🌍 <b>Country:</b> {country}\n"
+                f"🌍 <b>Country:</b> {country}\n\n"
+                f"{proxy_warn}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"BY @caydigitals | <a href='https://t.me/clydecrunchybot'>BOT</a> | <a href='https://t.me/caysredirect'>Channel</a>"
             ).strip()
         else:
             msg = result.get("message", "Check failed")
