@@ -2887,12 +2887,13 @@ def format_single_result(result, user_plan="FREE", mode="Crunchyroll"):
 ━━━━━━━━━━━━━━━━━━━━━━━
 BY @caydigitals | <a href='https://t.me/clydecrunchybot'>BOT</a> | <a href='https://t.me/caysredirect'>Channel</a>
             """.strip()
+            
+        status_msg = result.get('message') or 'Temporary check failure — try again'
 
         # CapCut-specific: hint proxy if no proxy was used
         if mode == "CapCut" and result.get("_proxy_warning"):
             status_msg += "\n\n💡 <b>Tip:</b> Enable proxy — CapCut blocks VPS/server IPs without one."
 
-        status_msg = result.get('message') or 'Temporary check failure — try again'
         return f"""
 ❌ <b>CHECK FAILED</b>
 
